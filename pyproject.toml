@@ -22,8 +22,7 @@ typing-extensions = "^4.8.0"
 urllib3 = "^2.1.0"
 uvicorn = "^0.24.0.post1"
 itsdangerous = "^2.1.2"
-fastapi = "0.70.1"
-starlette = "0.16.0"
+fastapi = "^0.104.1"
 
 
 [build-system]
