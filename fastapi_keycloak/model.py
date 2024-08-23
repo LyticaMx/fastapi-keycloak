@@ -52,15 +52,15 @@ class KeycloakUser(BaseModel):
     enabled: bool
     totp: bool
     emailVerified: bool
-    firstName: Optional[str]
-    lastName: Optional[str]
-    email: Optional[str]
+    firstName: Optional[str] = None
+    lastName: Optional[str] = None
+    email: Optional[str] = None
     disableableCredentialTypes: List[str]
     requiredActions: List[str]
-    realmRoles: Optional[List[str]]
+    realmRoles: Optional[List[str]] = None
     notBefore: int
-    access: dict
-    attributes: Optional[dict]
+    access: Optional[dict] = None
+    attributes: Optional[dict] = None
 
 
 class UsernamePassword(BaseModel):
@@ -97,19 +97,19 @@ class OIDCUser(BaseModel):
     details. This is a mere proxy object.
     """
 
-    azp: Optional[str]
+    azp: Optional[str] = None
     sub: str
     iat: int
     exp: int
-    scope: Optional[str]
+    scope: Optional[str] = None
     email_verified: bool
-    name: Optional[str]
-    given_name: Optional[str]
-    family_name: Optional[str]
-    email: Optional[str]
-    preferred_username: Optional[str]
-    realm_access: Optional[dict]
-    resource_access: Optional[dict]
+    name: Optional[str] = None
+    given_name: Optional[str] = None
+    family_name: Optional[str] = None
+    email: Optional[str] = None
+    preferred_username: Optional[str] = None
+    realm_access: Optional[dict] = None
+    resource_access: Optional[dict] = None
     extra_fields: dict = Field(default_factory=dict)
 
     @property
@@ -207,10 +207,12 @@ class KeycloakToken(BaseModel):
     Attributes:
         access_token (str): An access token
         refresh_token (str): An a refresh token, default None
+        id_token (str): An issued by the Authorization Server token id, default None
     """
 
     access_token: str
     refresh_token: Optional[str] = None
+    id_token: Optional[str] = None
 
     def __str__(self):
         """String representation of KeycloakToken"""
@@ -229,9 +231,9 @@ class KeycloakGroup(BaseModel):
 
     id: str
     name: str
-    path: Optional[str]
-    realmRoles: Optional[List[str]]
-    subGroups: Optional[List["KeycloakGroup"]]
+    path: Optional[str] = None
+    realmRoles: Optional[List[str]] = None
+    subGroups: Optional[List["KeycloakGroup"]] = None
 
 
 KeycloakGroup.update_forward_refs()

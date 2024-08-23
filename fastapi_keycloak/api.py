@@ -136,6 +136,7 @@ class FastAPIKeycloak:
             admin_client_secret: str,
             callback_uri: str,
             admin_client_id: str = "admin-cli",
+            scope: str = "openid profile email",
             timeout: int = 10,
     ):
         """FastAPIKeycloak constructor
@@ -150,6 +151,7 @@ class FastAPIKeycloak:
             callback_uri (str): Callback URL of the instance, used for auth flows. Must match at least one
             `Valid Redirect URIs` of Keycloak and should point to an endpoint that utilizes the authorization_code flow.
             timeout (int): Timeout in seconds to wait for the server
+            scope (str): OIDC scope
         """
         self.server_url = server_url
         self.realm = realm
@@ -159,6 +161,7 @@ class FastAPIKeycloak:
         self.admin_client_secret = admin_client_secret
         self.callback_uri = callback_uri
         self.timeout = timeout
+        self.scope = scope
         self._get_admin_token()  # Requests an admin access token on startup
 
     @property
@@ -691,6 +694,25 @@ class FastAPIKeycloak:
             url=f"{self.users_uri}/{user_id}/groups",
             method=HTTPMethod.GET,
         )
+    
+    @result_or_error(response_model=KeycloakUser, is_list=True)
+    def get_group_members(self, group_id: str):
+        """Get all members of a group.
+        
+        Args:
+            group_id (str): ID of the group of interest
+
+        Returns:
+            List[KeycloakUser]: All users in the group. Note that
+            the user objects returned are not fully populated.
+        
+        Raises:
+            KeycloakError: If the resulting response is not a successful HTTP-Code (>299)
+        """
+        return self._admin_request(
+            url=f"{self.groups_uri}/{group_id}/members",
+            method=HTTPMethod.GET,
+        )
 
     @result_or_error()
     def remove_user_group(self, user_id: str, group_id: str) -> dict:
@@ -960,6 +982,7 @@ class FastAPIKeycloak:
             "username": username,
             "password": password,
             "grant_type": "password",
+            "scope": self.scope,
         }
         response = requests.post(url=self.token_uri, headers=headers, data=data, timeout=self.timeout)
         if response.status_code == 401:
@@ -1043,8 +1066,9 @@ class FastAPIKeycloak:
 
     @functools.cached_property
     def login_uri(self):
-        """The URL for users to login on the realm. Also adds the client id and the callback."""
+        """The URL for users to login on the realm. Also adds the client id, the callback and the scope."""
         params = {
+            "scope": self.scope,
             "response_type": "code",
             "client_id": self.client_id,
             "redirect_uri": self.callback_uri,
