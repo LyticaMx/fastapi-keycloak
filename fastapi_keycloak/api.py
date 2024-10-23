@@ -1285,6 +1285,43 @@ class FastAPIKeycloak:
                 status_code=400, reason=f"Error terminating user session: {str(e)}"
             )
 
+    def refresh_token(self, refresh_token: str) -> dict:
+        """Realiza el intercambio de refresh token por un nuevo access token.
+
+        Args:
+            refresh_token (str): El token de refresh que se intercambiará.
+
+        Returns:
+            dict: Diccionario que contiene el nuevo access token, refresh token y otros detalles.
+
+        Raises:
+            HTTPException: Si hay algún problema con el refresh token.
+        """
+        # content_type = "application/json"
+        content_type = "application/x-www-form-urlencoded"
+        headers = {"Content-Type": f"{content_type}"}
+        data = {
+            "client_id": self.client_id,
+            "client_secret": self.client_secret,
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+        }
+
+        # Realiza la solicitud al endpoint de token de Keycloak
+        response = requests.post(
+            url=self.token_uri, headers=headers, data=data, timeout=self.timeout
+        )
+
+        # Si la respuesta es correcta, devolvemos el nuevo token
+        if response.status_code == 200:
+            return response.json()
+
+        # Si hay algún error, lanzamos una excepción
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=f"Error refreshing token: {response.json().get('error_description', 'Unknown error')}",
+        )
+
     @result_or_error(response_model=KeycloakToken)
     def exchange_authorization_code(
         self, session_state: str, code: str
