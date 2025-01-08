@@ -1017,65 +1017,83 @@ class FastAPIKeycloak:
 
     def user_login(self, username: str, password: str) -> dict:
         """
-        Realiza el login de un usuario con validación de vigencia de la cuenta.
+        Logs in a user by validating credentials, account expiration, and session limits.
 
         Args:
-            username (str): Nombre de usuario.
-            password (str): Contraseña del usuario.
+            username (str): The username or email of the user.
+            password (str): The user's password.
 
         Returns:
-            dict: Token de acceso y detalles adicionales si el login es exitoso.
+            dict: Access tokens, refresh tokens, and other relevant data.
 
         Raises:
-            HTTPException: Si el usuario no está activo o la cuenta ha expirado.
+            HTTPException: If login fails due to invalid credentials, expired account,
+            or exceeded session limits.
         """
-        try:
-            # Obtener el usuario basado en el username
-            user = self.get_user(query=f"username={username}")
+        # Fetch the user by username
+        user = self.get_user(query=f"username={username}")
 
-            # Verificar si el usuario tiene una fecha de expiración
-            expiration_date = user.attributes.get("account_expiration")
-            if expiration_date:
-                # Asegurarse de que sea una cadena de texto
-                if isinstance(expiration_date, list):
-                    expiration_date = expiration_date[
-                        0
-                    ]  # Obtener el primer elemento de la lista
-
-                # Convertir la fecha de expiración a un objeto datetime
-                expiration_date = datetime.fromisoformat(expiration_date.rstrip("Z"))
-
-                # Comparar con la fecha actual
-                if datetime.utcnow() > expiration_date:
-                    raise HTTPException(
-                        status_code=403,
-                        detail="La cuenta ha expirado. Contacte al administrador.",
-                    )
-
-            # Realizar el login si la cuenta está vigente
-            headers = {"Content-Type": "application/x-www-form-urlencoded"}
-            data = {
-                "client_id": self.client_id,
-                "client_secret": self.client_secret,
-                "username": username,
-                "password": password,
-                "grant_type": "password",
-                "scope": self.scope,
-            }
-            response = requests.post(
-                url=self.token_uri, headers=headers, data=data, timeout=self.timeout
+        # Validate account expiration
+        expiration_date = user.attributes.get("account_expiration")
+        if expiration_date:
+            expiration_date = (
+                expiration_date[0]
+                if isinstance(expiration_date, list)
+                else expiration_date
             )
-
-            # Verificar errores en el login
-            if response.status_code == 401:
-                raise HTTPException(status_code=401, detail="Credenciales inválidas.")
-            if response.status_code != 200:
+            expiration_date = datetime.fromisoformat(expiration_date.rstrip("Z"))
+            if expiration_date < datetime.utcnow():
                 raise HTTPException(
-                    status_code=response.status_code,
-                    detail=f"Error en el login: {response.text}",
+                    status_code=403,
+                    detail="The account has expired. Please contact the administrator.",
                 )
 
-            # Retornar los tokens si el login es exitoso
+        # Validate the number of active sessions for the user
+        active_sessions = self.get_active_sessions(user_id=user.id)
+        max_sessions = self.get_max_concurrent_sessions()
+        if max_sessions > 0 and len(active_sessions) >= max_sessions:
+            raise HTTPException(
+                status_code=403,
+                detail="Concurrent session limit reached. Please close a session and try again.",
+            )
+
+        # Attempt to log in
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        data = {
+            "client_id": self.client_id,
+            "client_secret": self.client_secret,
+            "username": username,
+            "password": password,
+            "grant_type": "password",
+            "scope": self.scope,
+        }
+        response = requests.post(
+            url=self.token_uri, headers=headers, data=data, timeout=self.timeout
+        )
+
+        # Validate the authentication result
+        if response.status_code == 401:
+            raise HTTPException(status_code=401, detail="Invalid credentials.")
+
+        if response.status_code == 400:
+            if len(user.requiredActions) > 0:
+                reason = user.requiredActions[0]
+                exception = {
+                    "update_user_locale": UpdateUserLocaleException(),
+                    "CONFIGURE_TOTP": ConfigureTOTPException(),
+                    "VERIFY_EMAIL": VerifyEmailException(),
+                    "UPDATE_PASSWORD": UpdatePasswordException(),
+                    "UPDATE_PROFILE": UpdateProfileException(),
+                }.get(
+                    reason,
+                    MandatoryActionException(
+                        detail=f"This user cannot log in until the required action is resolved: {reason}."
+                    ),
+                )
+                raise exception
+
+        # Return tokens if login is successful
+        try:
             token_data = response.json()
             return {
                 "access_token": token_data.get("access_token"),
@@ -1084,11 +1102,10 @@ class FastAPIKeycloak:
                 "expires_in": token_data.get("expires_in"),
                 "refresh_expires_in": token_data.get("refresh_expires_in"),
             }
-        except HTTPException as e:
-            raise e
-        except Exception as e:
-            raise HTTPException(
-                status_code=500, detail=f"Error inesperado durante el login: {str(e)}"
+        except JSONDecodeError:
+            raise KeycloakError(
+                status_code=response.status_code,
+                reason="Failed to parse token response.",
             )
 
     def get_active_sessions(self, user_id: str) -> list:
