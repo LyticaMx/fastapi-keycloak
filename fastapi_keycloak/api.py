@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import functools
 import json
+from datetime import datetime
 from json import JSONDecodeError
 from typing import Any, Callable, List, Type, Union
 from urllib.parse import urlencode
@@ -1015,70 +1016,66 @@ class FastAPIKeycloak:
     #     return response
 
     def user_login(self, username: str, password: str) -> dict:
-        """Models the password OAuth2 flow. Exchanges username and password for an access token. Will raise detailed
-        errors if login fails due to requiredActions
+        """
+        Realiza el login de un usuario con validación de vigencia de la cuenta.
 
         Args:
-            username (str): Username used for login
-            password (str): Password of the user
+            username (str): Nombre de usuario.
+            password (str): Contraseña del usuario.
 
         Returns:
-            dict: Access token and additional info if the exchange succeeds
+            dict: Token de acceso y detalles adicionales si el login es exitoso.
 
         Raises:
-            HTTPException: If the credentials did not match any user
-            MandatoryActionException: If the login is not possible due to mandatory actions
-            KeycloakError: If the resulting response is not a successful HTTP-Code (>299, != 400, != 401)
+            HTTPException: Si el usuario no está activo o la cuenta ha expirado.
         """
-        user = self.get_user(query=f"username={username}")
+        try:
+            # Obtener el usuario basado en el username
+            user = self.get_user(query=f"username={username}")
 
-        # Verifica el número de sesiones activas para el usuario
-        active_sessions = self.get_active_sessions(user_id=user.id)
-        max_sessions = (
-            self.get_max_concurrent_sessions()
-        )  # Obtén el límite de sesiones de los atributos
+            # Verificar si el usuario tiene una fecha de expiración
+            expiration_date = user.attributes.get("account_expiration")
+            if expiration_date:
+                # Asegurarse de que sea una cadena de texto
+                if isinstance(expiration_date, list):
+                    expiration_date = expiration_date[
+                        0
+                    ]  # Obtener el primer elemento de la lista
 
-        if max_sessions > 0 and len(active_sessions) >= max_sessions:
-            raise HTTPException(
-                status_code=403, detail="Max concurrent sessions limit reached."
+                # Convertir la fecha de expiración a un objeto datetime
+                expiration_date = datetime.fromisoformat(expiration_date.rstrip("Z"))
+
+                # Comparar con la fecha actual
+                if datetime.utcnow() > expiration_date:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="La cuenta ha expirado. Contacte al administrador.",
+                    )
+
+            # Realizar el login si la cuenta está vigente
+            headers = {"Content-Type": "application/x-www-form-urlencoded"}
+            data = {
+                "client_id": self.client_id,
+                "client_secret": self.client_secret,
+                "username": username,
+                "password": password,
+                "grant_type": "password",
+                "scope": self.scope,
+            }
+            response = requests.post(
+                url=self.token_uri, headers=headers, data=data, timeout=self.timeout
             )
 
-        headers = {"Content-Type": "application/x-www-form-urlencoded"}
-        data = {
-            "client_id": self.client_id,
-            "client_secret": self.client_secret,
-            "username": username,
-            "password": password,
-            "grant_type": "password",
-            "scope": self.scope,
-        }
-        response = requests.post(
-            url=self.token_uri, headers=headers, data=data, timeout=self.timeout
-        )
-
-        if response.status_code == 401:
-            raise HTTPException(status_code=401, detail="Invalid user credentials")
-
-        if response.status_code == 400:
-            if len(user.requiredActions) > 0:
-                reason = user.requiredActions[0]
-                exception = {
-                    "update_user_locale": UpdateUserLocaleException(),
-                    "CONFIGURE_TOTP": ConfigureTOTPException(),
-                    "VERIFY_EMAIL": VerifyEmailException(),
-                    "UPDATE_PASSWORD": UpdatePasswordException(),
-                    "UPDATE_PROFILE": UpdateProfileException(),
-                }.get(
-                    reason,  # Try to return the matching exception
-                    MandatoryActionException(
-                        detail=f"This user can't login until the following action has been "
-                        f"resolved: {reason}"
-                    ),
+            # Verificar errores en el login
+            if response.status_code == 401:
+                raise HTTPException(status_code=401, detail="Credenciales inválidas.")
+            if response.status_code != 200:
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=f"Error en el login: {response.text}",
                 )
-                raise exception
 
-        # En lugar de devolver el objeto de respuesta, devuelve un diccionario con los datos relevantes
-        try:
+            # Retornar los tokens si el login es exitoso
             token_data = response.json()
             return {
                 "access_token": token_data.get("access_token"),
@@ -1087,10 +1084,11 @@ class FastAPIKeycloak:
                 "expires_in": token_data.get("expires_in"),
                 "refresh_expires_in": token_data.get("refresh_expires_in"),
             }
-        except JSONDecodeError:
-            raise KeycloakError(
-                status_code=response.status_code,
-                reason="Failed to parse token response.",
+        except HTTPException as e:
+            raise e
+        except Exception as e:
+            raise HTTPException(
+                status_code=500, detail=f"Error inesperado durante el login: {str(e)}"
             )
 
     def get_active_sessions(self, user_id: str) -> list:
@@ -1504,3 +1502,22 @@ class FastAPIKeycloak:
     def __repr__(self):
         """Debug representation"""
         return f"{self.__str__()} <class {self.__class__} >"
+
+    def set_account_expiration(self, user_id: str, expiration_datetime: str):
+        """
+        Asigna una fecha de expiración a la cuenta de un usuario.
+
+        Args:
+            user_id (str): ID del usuario.
+            expiration_datetime (str): Fecha de expiración en formato ISO 8601.
+
+        Returns:
+            dict: Confirmación de la operación.
+        """
+        attributes = {"account_expiration": expiration_datetime}
+
+        user = self.get_user(user_id=user_id)
+        user.attributes = attributes
+        user.attributes.update(attributes)
+        self.update_user(user)
+        return {"message": "Account expiration date set successfully."}
