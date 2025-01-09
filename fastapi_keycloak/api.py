@@ -1034,18 +1034,27 @@ class FastAPIKeycloak:
         user = self.get_user(query=f"username={username}")
 
         # Validate account expiration
-        expiration_date = user.attributes.get("account_expiration")
+        expiration_date = None
+        if user.attributes and isinstance(user.attributes, dict):
+            expiration_date = user.attributes.get("account_expiration")
+
         if expiration_date:
             expiration_date = (
                 expiration_date[0]
                 if isinstance(expiration_date, list)
                 else expiration_date
             )
-            expiration_date = datetime.fromisoformat(expiration_date.rstrip("Z"))
-            if expiration_date < datetime.utcnow():
+            try:
+                expiration_date = datetime.fromisoformat(expiration_date.rstrip("Z"))
+                if expiration_date < datetime.utcnow():
+                    raise HTTPException(
+                        status_code=403,
+                        detail="The account has expired. Please contact the administrator.",
+                    )
+            except ValueError:
                 raise HTTPException(
-                    status_code=403,
-                    detail="The account has expired. Please contact the administrator.",
+                    status_code=400,
+                    detail="Invalid account expiration date format.",
                 )
 
         # Validate the number of active sessions for the user
