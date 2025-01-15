@@ -1033,6 +1033,13 @@ class FastAPIKeycloak:
         # Fetch the user by username
         user = self.get_user(query=f"username={username}")
 
+        # Check if the user is temporarily disabled
+        if self.is_user_temporarily_disabled(user_id=user.id):
+            raise HTTPException(
+                status_code=403,
+                detail="The user is temporarily disabled due to too many failed login attempts.",
+            )
+
         # Validate account expiration
         expiration_date = None
         if user.attributes and isinstance(user.attributes, dict):
@@ -1547,3 +1554,109 @@ class FastAPIKeycloak:
         user.attributes.update(attributes)
         self.update_user(user)
         return {"message": "Account expiration date set successfully."}
+
+    @result_or_error()
+    def is_user_temporarily_disabled(self, user_id: str) -> bool:
+        """
+        Verifica si un usuario está temporalmente bloqueado debido a intentos fallidos de inicio de sesión.
+
+        Args:
+            user_id (str): El ID del usuario que se desea verificar.
+
+        Returns:
+            bool: `True` si el usuario está temporalmente bloqueado, `False` en caso contrario.
+
+        Raises:
+            KeycloakError: Si ocurre algún error al consultar los eventos en Keycloak.
+        """
+        # Construcción del URL para consultar los eventos del usuario
+        url = f"{self._admin_uri}/events"
+        headers = {"Authorization": f"Bearer {self.admin_token}"}
+        # headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        params = {
+            "type": "LOGIN_ERROR",  # Filtrar solo eventos relacionados con errores de inicio de sesión
+            "userId": user_id,  # Especificar el ID del usuario
+        }
+
+        # Realizar la solicitud a Keycloak
+        response = requests.get(
+            url, headers=headers, params=params, timeout=self.timeout
+        )
+        # Manejar errores de la solicitud
+        if response.status_code != 200:
+            raise KeycloakError(
+                status_code=response.status_code,
+                reason=f"Error al consultar eventos de Keycloak: {response.content.decode('utf-8')}",
+            )
+
+        # Analizar la respuesta para buscar el error `user_temporarily_disabled`
+        events = response.json()
+        for event in events:
+            if event.get("error") == "user_temporarily_disabled":
+                return True  # El usuario está bloqueado temporalmente
+
+        # Si no se encontró el error, el usuario no está bloqueado
+        return False
+
+    @result_or_error()
+    def clear_login_error_events(self, user_id: str) -> dict:
+        """
+        Removes LOGIN_ERROR events for a specific user, ensures the user is enabled,
+        and clears brute force login failures.
+
+        Args:
+            user_id (str): The ID of the user whose events and brute force failures should be removed.
+
+        Returns:
+            dict: Confirmation that the operations were successfully performed.
+
+        Raises:
+            KeycloakError: If an error occurs while trying to perform any of the operations.
+        """
+        # Build the URL to delete login error events
+        events_url = f"{self._admin_uri}/events"
+
+        # Configure the request parameters for login error events
+        events_params = {"type": "LOGIN_ERROR", "user": user_id}
+
+        # Make the DELETE request to clear login error events
+        events_response = requests.delete(
+            events_url,
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+            params=events_params,
+        )
+
+        if events_response.status_code != 204:  # Not successful
+            raise KeycloakError(
+                status_code=events_response.status_code,
+                reason=f"Error removing LOGIN_ERROR events: {events_response.content.decode('utf-8')}",
+            )
+
+        # Build the URL to clear brute force failures
+        brute_force_url = (
+            f"{self._admin_uri}/attack-detection/brute-force/users/{user_id}"
+        )
+
+        # Make the DELETE request to clear brute force failures
+        brute_force_response = requests.delete(
+            brute_force_url, headers={"Authorization": f"Bearer {self.admin_token}"}
+        )
+
+        if brute_force_response.status_code != 204:  # Not successful
+            raise KeycloakError(
+                status_code=brute_force_response.status_code,
+                reason=f"Error clearing brute force failures: {brute_force_response.content.decode('utf-8')}",
+            )
+
+        # Fetch the user to ensure their status is updated
+        user = self.get_user(user_id=user_id)
+
+        # Enable the user if not already enabled
+        if not user.enabled:
+            user.enabled = True
+            self.update_user(user)
+
+        # Return confirmation message
+        return {
+            "message": f"LOGIN_ERROR events and brute force failures cleared, and user {user_id} unlocked."
+        }
