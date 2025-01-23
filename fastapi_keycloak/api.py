@@ -35,6 +35,8 @@ from fastapi_keycloak.model import (
     OIDCUser,
 )
 
+ALLOWED_QUERY_FIELDS = {"email", "username", "firstName", "lastName"}
+
 
 def result_or_error(
     response_model: Type[BaseModel] = None, is_list: bool = False
@@ -164,6 +166,15 @@ class FastAPIKeycloak:
         self.timeout = timeout
         self.scope = scope
         self._get_admin_token()  # Requests an admin access token on startup
+
+    def validate_query(self, query: str) -> str:
+        # Divide el query en pares clave=valor
+        pairs = query.split("&")
+        for pair in pairs:
+            key, _, value = pair.partition("=")
+            if key not in ALLOWED_QUERY_FIELDS or not value:
+                raise ValueError(f"Invalid query field or value: {key}={value}")
+        return query
 
     @property
     def admin_token(self):
@@ -867,6 +878,7 @@ class FastAPIKeycloak:
             KeycloakError: If the resulting response is not a successful HTTP-Code (>299)
         """
         if user_id is None:
+            self.validate_query(query)
             response = self._admin_request(
                 url=f"{self.users_uri}?{query}", method=HTTPMethod.GET
             )
