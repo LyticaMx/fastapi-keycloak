@@ -274,7 +274,13 @@ class FastAPIKeycloak:
                 JWTClaimsError: If any claim is invalid
                 HTTPException: If any role required is not contained within the roles of the users
             """
-            decoded_token = self._decode_token(token=token, audience="account")
+            try:
+                decoded_token = self._decode_token(token=token, audience="account")
+            except ExpiredSignatureError:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Access token has expired.",
+                )
             user = OIDCUser.parse_obj(decoded_token)
             if required_roles:
                 for role in required_roles:
